@@ -715,8 +715,6 @@ class OverlayApp(customtkinter.CTk):
         if minescript.screen_name() is None:
             if key == CFG["key_toggle"]:
                 self.toggle_overlay()
-            elif key == 256:
-                self.go_back()
             elif key in CFG.get("shortcuts", {}):
                 self.run_shortcut(CFG["shortcuts"][key])
 
