@@ -109,6 +109,22 @@ def tkinter_to_glfw(keycode):
     }
     return mapping.get(keycode, keycode)
 
+def keycode_to_name(keycode):
+    """Converts a GLFW keycode to a human-readable string."""
+    # Basic Alphanumeric
+    if 32 <= keycode <= 126:
+        return chr(keycode)
+    
+    # Common Special Keys
+    mapping = {
+        256: "ESC", 257: "ENTER", 258: "TAB", 259: "BACKSPACE",
+        261: "DELETE", 262: "RIGHT", 263: "LEFT", 264: "DOWN", 265: "UP",
+        340: "L-SHIFT", 341: "L-CTRL", 342: "L-ALT",
+        344: "R-SHIFT", 345: "R-CTRL", 346: "R-ALT",
+    }
+    return mapping.get(keycode, f"Key {keycode}")
+
+
 
 # --- THEME COLORS ---
 COLOR_BG_SIDEBAR = "#181818"
@@ -457,7 +473,7 @@ class OverlayApp(customtkinter.CTk):
 
         # Shortcut Binder
         bound_key = get_shortcut_key_for_script(meta["id"])
-        btn_text = f"Shortcut: Key {bound_key}" if bound_key else "Shortcut: [None]"
+        btn_text = f"Shortcut: {keycode_to_name(bound_key)}" if bound_key else "Shortcut: [None]"
         btn_col = "#444444"
         if self.binding_mode:
             btn_text = "PRESS ANY KEY TO BIND..."
@@ -491,10 +507,13 @@ class OverlayApp(customtkinter.CTk):
                     row, text="", variable=var, progress_color=COLOR_ACCENT
                 ).pack(side="right")
             elif stype == "dropdown":
+                def _update_drop(val, v=var):
+                    v.set(val)
                 customtkinter.CTkOptionMenu(
                     row,
                     values=setting.get("options", []),
                     variable=var,
+                    command=_update_drop,
                     fg_color="#444",
                     button_color="#555",
                 ).pack(side="right")
@@ -559,10 +578,15 @@ class OverlayApp(customtkinter.CTk):
         else:
             self.current_script_meta = meta
             self.current_module = meta["module"]
+            
             defaults = {
                 k: v.get("default") for k, v in meta["config"]["controls"].items()
             }
-            self.start_script_thread(defaults, script_id)
+            # Merge saved params over defaults
+            params = defaults.copy()
+            params.update(meta.get("params", {}))
+            
+            self.start_script_thread(params, script_id)
 
     def clear_content(self):
         for w in self.content_area.winfo_children():
@@ -607,6 +631,7 @@ class OverlayApp(customtkinter.CTk):
                         "title": conf.get("title", module_name),
                         "desc": conf.get("description", ""),
                         "config": conf,
+                        "params": {},
                     }
                     self.script_tree[cat].append(meta)
             except Exception as e:
@@ -628,19 +653,22 @@ class OverlayApp(customtkinter.CTk):
         self.current_script_meta = meta
         self.config_vars = {}
         controls = meta["config"].get("controls", {})
+        saved_params = meta.get("params", {})
+
         for key, setting in controls.items():
             stype = setting.get("type", "string")
             default = setting.get("default")
+            current_val = saved_params.get(key, default)
 
             if stype == "bool":
-                self.config_vars[key] = customtkinter.BooleanVar(value=default)
+                self.config_vars[key] = customtkinter.BooleanVar(value=current_val)
             elif stype == "int":
-                self.config_vars[key] = customtkinter.IntVar(value=default)
+                self.config_vars[key] = customtkinter.IntVar(value=current_val)
             elif stype == "float":
-                self.config_vars[key] = customtkinter.DoubleVar(value=default)
+                self.config_vars[key] = customtkinter.DoubleVar(value=current_val)
             else:
                 self.config_vars[key] = customtkinter.StringVar(
-                    value=str(default) if default is not None else ""
+                    value=str(current_val) if current_val is not None else ""
                 )
 
         self.view_mode = "CONFIG"
@@ -648,6 +676,11 @@ class OverlayApp(customtkinter.CTk):
 
     def go_back(self):
         if self.view_mode == "CONFIG":
+            # Save current params before leaving
+            if self.current_script_meta:
+                 params = {k: v.get() for k, v in self.config_vars.items()}
+                 self.current_script_meta["params"] = params
+            
             self.select_category(self.selected_category)
         elif self.view_mode == "BROWSER":
             self.go_home()
@@ -739,13 +772,23 @@ class OverlayApp(customtkinter.CTk):
         self.current_script_meta = meta
         self.current_module = meta["module"]
 
-        defaults = {k: v.get("default") for k, v in meta["config"]["controls"].items()}
-        self.start_script_thread(defaults, script_name)
+        # Determine params
+        if self.view_mode == "CONFIG" and self.current_script_meta["id"] == script_name:
+             # We are editing this script, take live values
+             params = {k: v.get() for k, v in self.config_vars.items()}
+        else:
+             # Load from meta/defaults
+             defaults = {k: v.get("default") for k, v in meta["config"]["controls"].items()}
+             params = defaults.copy()
+             params.update(meta.get("params", {}))
+
+        self.start_script_thread(params, script_name)
 
     def run_script(self):
         if self.running_thread and self.running_thread.is_alive():
             return
         params = {k: v.get() for k, v in self.config_vars.items()}
+        self.current_script_meta["params"] = params
         self.start_script_thread(params, self.current_script_meta["id"])
 
     def start_script_thread(self, params, script_id):
